@@ -1,0 +1,1490 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <windows.h>
+#include <string.h>
+
+#define DELAY 1000 //CPU의 처리속도 고려
+#define proc 10 //프로세스 최대 생성 개수
+#define Arri_t 5 //arival_time의 상한
+#define Burs_t 10       //burst_time의 상한
+#define IO_t 3   //IO_time의 상한 일단 보류
+#define Prior 10        //priority의 상한
+
+typedef struct
+{
+	int pid;                //프로세스 ID, 1부터 시작
+	int arri_time;          //프로세스 도착 시간
+	int wait_time;          //프로세스의 waiting time
+	int burs_time;          //프로세스의 burst time
+	int exec_time;          //프로세스의 실행시간
+	int rema_time;          //프로세스가 Terminate될때까지 남은 시간 I/O burst time+cpu burst = (initial) remain time
+	int to_io_time;         //IO가 발생한 총 시간
+	int io_time;		    //IO가 발생할 시간(1부터 3까지)
+	int priority;           //프로세스에게 부여되는 priority
+}PCB;
+
+typedef struct
+{
+
+	int processes;
+	int num_cs;  // context switch 발생 횟수 
+	int sum_wait;
+	float ave_wait;
+	int sum_burst;
+	float ave_burst;
+	int sum_turn;
+	float ave_turn;
+
+}RESULT;
+
+int process_num(void); //프로세스 생성 개수 입력받는 함수
+int error_check(int i, int min, int max); //입력받은 수에 대한 에러 체킹함수
+PCB* create_Queue(int P_no); //큐 생성
+PCB* copy_Queue(PCB* PCBarray, int P_no); //큐 복사
+PCB* sort_AT(PCB* sorted); //도착시간에 따른 정렬
+PCB* sort_RT(PCB* sorted); //남은 시간에 따른 정렬
+PCB* sort_Pri(PCB* sorted);//Priority에 따른 정렬
+PCB* create_rand_P(int P_no);//프로세스를 랜덤하게 생성
+PCB* create_user_P(int P_no);//프로세스를 사용자 입력에 따라 생성
+PCB get_P(PCB* PCBarray); //큐의 가장 앞 데이터 가져오기
+void delete_Queue(PCB* PCBarray, int s); //큐에 지우고 싶은 거 지우는 s기준으로 한칸 씩 떙겨주는 거
+void put_Queue(PCB* PCBarray, PCB temp); //큐의 맨 뒤에 데이터 추가
+int Queue_full(PCB* PCBarray, int P_no); //큐의 크기 고려
+PCB dispatcher(PCB* PCBarray, PCB CPU); //Context Switch
+PCB init_CPU(PCB CPU); //초기화
+void init_result(RESULT* result); //스케쥴링 결과 초기화
+void print_PCB(PCB* PCBarray, int P_no); //PCB의 내용 출력
+void print_CPU(PCB CPU); //CPU에서 돌아가는 프로세스 출력
+void print_Queue(PCB* ready_Q); //레디,웨이팅, 터미네이트 큐에 있는 프로세스 출력
+void print_Gantt_Chart(int Timer); //간트차트 출력
+void IO(int IO_no);				//IO과정
+void print_result(PCB* terminated_Q, int P_no, int a); //스케쥴링 결과 출력
+void print_result_all(int P_no);//모든 스케쥴링의 결과 출력
+void FCFS(PCB* PCBarray, int P_no); //FCFS 구현
+void preemp_SJF(PCB* PCBarray, int P_no);//Preemptive SJF 구현
+void non_SJF(PCB* PCBarray, int P_no);//Non-Preemptive SJF 구현
+void preemp_Priority(PCB* PCBarray, int P_no);//Preemptive Priority 구현
+void non_Priority(PCB* PCBarray, int P_no);//Non-Preemptive Priority 구현
+void RR(PCB* PCBarray, int P_no); //Round Robin
+int Select(void); //사용자 인터페이스 함수(스케쥴링 선택)
+int Context_Switch = 0;           //Context_Switching이 일어난 횟수
+int Timer;                      //타이머
+int gantt[1000] = { 0 };    //간트차트를 위한 배열 선언
+int IO_no = 0;	//io갯수
+int IO_time[1000] = { 0 };	//io발생시간
+int IO_id[1000] = { 0 };		//io발생id
+PCB CPU;        //CPU
+RESULT result[6] = { 0 };           //6개 스케쥴링의 결과 저장
+
+
+int main(void)
+{
+	while (1) 
+		if (Select())
+			break;
+	return 0;
+
+}
+
+int process_num(void)
+{
+	int process_num = 0;
+	while (1)
+	{
+		printf("\n");
+		printf("생성할 프로세스의 개수: ");
+		scanf("%d", &process_num);
+		if (error_check(process_num, 1, proc)) //프로세스 최대 개수 제한
+			break;
+		printf("프로세스 개수 값 오류 \n");
+		printf("\n");
+
+	}
+
+	return process_num;
+}
+
+int error_check(int i, int min, int max)
+{
+	if (min <= i && i <= max)
+		return 1;
+	else
+	{
+		printf("0개 이상 10개 이하의 프로세스 개수를 입력해 주세요.\n");
+		printf("\n");
+
+		return 0;
+	}
+}
+
+PCB* create_Queue(int P_no)
+{
+	PCB* Q;
+	Q = (PCB *)malloc((P_no + 1) * sizeof(PCB)); // 큐를 동적 메모리로 할당
+	if (Q == NULL)
+	{
+		printf("생성 실패\n");
+		exit(-1);
+
+	}
+
+	memset(Q, 0, (P_no + 1) * sizeof(PCB)); // 큐의 값을 0으로 초기화
+	return Q;
+
+}
+
+PCB get_P(PCB* PCBarray) //PCB를 temp로 옮기김
+{
+	PCB temp;
+	temp = PCBarray[0];
+	return temp;
+}
+
+
+void delete_Queue(PCB* PCBarray, int s) //큐의 PCB를 1칸 씩 땡긴다
+{
+	int i;
+
+	for (i = s; PCBarray[i].pid != 0; i++)
+		PCBarray[i] = PCBarray[i + 1];
+	
+	PCBarray[i].pid = 0;
+	PCBarray[i].arri_time = 0;
+	PCBarray[i].burs_time = 0;
+	PCBarray[i].wait_time = 0;
+	PCBarray[i].exec_time = 0;
+	PCBarray[i].rema_time = 0;
+	PCBarray[i].to_io_time = 0;
+	PCBarray[i].io_time = 0;
+	PCBarray[i].priority = 0;
+}
+void put_Queue(PCB* PCBarray, PCB temp)
+{
+	int i;
+	for (i = 0; PCBarray[i].pid != 0; i++);
+	PCBarray[i] = temp;
+
+}
+int Queue_full(PCB* PCBarray, int P_no) //꽉 차있으면 1 빈 칸이 하나라도 있으면 0
+{
+	int i;
+	for (i = 0; i<P_no; i++)
+	{
+		if (PCBarray[i].pid == 0)
+			return 0;
+	}
+	return 1;
+}
+
+PCB dispatcher(PCB* PCBarray, PCB CPU) // 해야될 시간이 남았으면 큐 맨 뒤에다가 놓고 맨 앞에거를 뽑고 한칸씩 땡김
+{
+	if (CPU.rema_time != 0) // 모든 수행 시간이 끝남
+		put_Queue(PCBarray, CPU);
+
+
+	CPU = get_P(PCBarray); 
+	delete_Queue(PCBarray, 0);
+	Context_Switch++;
+
+	return CPU;
+
+}
+
+PCB init_CPU(PCB CPU)
+{
+	CPU.pid = 0;
+	CPU.arri_time = 0;
+	CPU.burs_time = 0;
+	CPU.wait_time = 0;
+	CPU.exec_time = 0;
+	CPU.rema_time = 0;
+	CPU.to_io_time = 0;
+	CPU.io_time = 0;
+	CPU.priority = 0;
+
+	return CPU;
+}
+
+void init_result(RESULT* result) //스케쥴러 종류가 6개
+{
+	int i;
+	for (i = 0; i<6; i++)
+	{
+		result[i].processes = 0;
+		result[i].num_cs = 0;
+		result[i].sum_wait = 0;
+		result[i].ave_wait = 0;
+		result[i].sum_burst = 0;
+		result[i].ave_burst = 0;
+		result[i].sum_turn = 0;
+		result[i].ave_turn = 0;
+
+	}
+
+}
+
+
+PCB* copy_Queue(PCB* PCBarray, int P_no) //PCB 큐에 복사
+{
+	int i;
+	PCB* copyPCB;
+
+	copyPCB = create_Queue(P_no);
+
+	for (i = 0; i<P_no; i++)
+	{
+		copyPCB[i].pid = PCBarray[i].pid;
+		copyPCB[i].arri_time = PCBarray[i].arri_time;
+		copyPCB[i].burs_time = PCBarray[i].burs_time;
+		copyPCB[i].wait_time = PCBarray[i].wait_time;
+		copyPCB[i].exec_time = PCBarray[i].exec_time;
+		copyPCB[i].rema_time = PCBarray[i].rema_time;
+		copyPCB[i].to_io_time = PCBarray[i].to_io_time;
+		copyPCB[i].io_time = PCBarray[i].io_time;
+		copyPCB[i].priority = PCBarray[i].priority;
+
+	}
+
+	return copyPCB;
+
+}
+PCB* sort_AT(PCB* sorted) //arrival time 에 따른 정렬
+{
+	int i, j, minindex;
+	PCB min;
+
+	for (i = 0; sorted[i].pid != 0; i++)
+	{
+		minindex = i;
+		min = sorted[i];
+		for (j = i + 1; sorted[j].pid != 0; j++)
+		{
+			if (min.arri_time > sorted[j].arri_time ||
+				min.arri_time == sorted[j].arri_time && min.pid > sorted[j].pid) //도착 시간이 같으면 pid가 작은 순으로
+			{
+				minindex = j;
+				min = sorted[j];
+			}
+		}
+		sorted[minindex] = sorted[i];
+		sorted[i] = min;
+	}
+
+	return sorted;
+}
+
+
+PCB* sort_RT(PCB* sorted) //remain time에 따른 정렬
+{
+	int i, j, minindex;
+	PCB min;
+
+	for (i = 0; sorted[i].pid != 0; i++)
+	{
+		minindex = i;
+		min = sorted[i];
+		for (j = i + 1; sorted[j].pid != 0; j++)
+		{
+			if (min.rema_time > sorted[j].rema_time ||
+				min.rema_time == sorted[j].rema_time && min.pid > sorted[j].pid)
+			{
+				minindex = j;
+				min = sorted[j];
+			}
+		}
+		sorted[minindex] = sorted[i];
+		sorted[i] = min;
+	}
+
+	return sorted;
+}
+
+PCB* sort_Pri(PCB* sorted) // priority에 따른 정렬
+{
+	int i, j, minindex;
+	PCB min;
+
+	for (i = 0; sorted[i].pid != 0; i++)
+	{
+		minindex = i;
+		min = sorted[i];
+		for (j = i + 1; sorted[j].pid != 0; j++)
+		{
+			if (min.priority < sorted[j].priority ||
+				min.priority == sorted[j].priority && min.pid < sorted[j].pid)
+			{
+				minindex = j;
+				min = sorted[j];
+			}
+		}
+		sorted[minindex] = sorted[i];
+		sorted[i] = min;
+	}
+
+	return sorted;
+}
+
+
+PCB* create_rand_P(int P_no) //임의의 P 생성
+{
+	int i;
+	PCB* PCBarray;
+	srand(time(NULL));
+
+	PCBarray = create_Queue(P_no);
+
+	for (i = 0; i<P_no; i++) {
+		PCBarray[i].pid = i + 1;
+		PCBarray[i].arri_time = rand() % Arri_t;
+		PCBarray[i].burs_time = (rand() % Burs_t) + 1;
+		PCBarray[i].wait_time = 0;
+		PCBarray[i].exec_time = 0;
+		PCBarray[i].rema_time = PCBarray[i].burs_time;//cpu burs_time과 IO의 총 시간의 합
+		PCBarray[i].to_io_time = 0; //초기 IO는 발생하지 않았으니 0
+		PCBarray[i].io_time = 0; //초기 IO는 발생하지 않았으니 0
+		PCBarray[i].priority = rand() % Prior + 1;
+
+	}
+
+	return PCBarray;
+}
+
+PCB* create_user_P(int P_no) //사용자가 직접 P 생성
+{
+	int i;
+	PCB* PCBarray;
+	PCBarray = create_Queue(P_no);
+
+	printf("\n");
+	for (i = 0; i<P_no; i++) {
+		PCBarray[i].pid = i + 1;
+		printf("%d번째 프로세스의 arrival time: ", PCBarray[i].pid);
+		scanf("%d", &PCBarray[i].arri_time);
+		printf("%d번째 프로세스의 burst time: ", PCBarray[i].pid);
+		scanf("%d", &PCBarray[i].burs_time);
+		PCBarray[i].wait_time = 0; //0으로 초기화
+		PCBarray[i].exec_time = 0; //0으로 초기화
+		PCBarray[i].rema_time = PCBarray[i].burs_time;
+		PCBarray[i].to_io_time = 0; //아직 발생하지 않았으니 0
+		PCBarray[i].io_time = 0; //아직 발생하지 않았으니 0
+		printf("%d번째 프로세스의 priority: ", PCBarray[i].pid);
+		scanf("%d", &PCBarray[i].priority);
+		printf("\n");
+	}
+
+	return PCBarray;
+}
+
+
+void print_PCB(PCB* PCBarray, int P_no)
+{
+	int i;
+	printf("\n  PROCESS\n");
+	printf("┌────────────────────────────────────────┐\n");
+	printf("│ PID│ 도착시간 │  Waiting │ Burst │ 실행시간│ 남은시간 │IO시간│ 우선순위 │\n");
+	printf("└────────────────────────────────────────┘\n");
+	for (i = 0; i<P_no; i++)
+	{
+		printf("    %d\t  %d\t     %d\t         %d\t  %d\t     %d\t        %d\t       %d\t \n",
+			PCBarray[i].pid, PCBarray[i].arri_time, PCBarray[i].wait_time,
+			PCBarray[i].burs_time, PCBarray[i].exec_time, PCBarray[i].rema_time, PCBarray[i].to_io_time,
+			PCBarray[i].priority);
+	}
+	printf("\n");
+}
+
+void print_CPU(PCB CPU)
+{
+	printf("  CPU\n");
+	printf("┌────────────────────────────────────────┐\n");
+	printf("│ PID│ 도착시간 │  Waiting │ Burst │ 실행시간│ 남은시간 │IO시간│ 우선순위 │\n");
+	printf("└────────────────────────────────────────┘\n");
+	printf("    %d\t  %d\t     %d\t         %d\t  %d\t     %d\t        %d\t       %d\t \n",
+		CPU.pid, CPU.arri_time, CPU.wait_time, CPU.burs_time,
+		CPU.exec_time, CPU.rema_time, CPU.to_io_time, CPU.priority);
+	printf("\n");
+}
+
+void print_Queue(PCB* Q)
+{
+	int i;
+
+	printf("┌────────────────────────────────────────┐\n");
+	printf("│ PID│ 도착시간 │  Waiting │ Burst │ 실행시간│ 남은시간 │IO시간│ 우선순위 │\n");
+	printf("└────────────────────────────────────────┘\n");
+	for (i = 0; Q[i].pid != 0; i++)
+	{
+		printf("    %d\t  %d\t     %d\t         %d\t  %d\t     %d\t        %d\t       %d\t \n",
+			Q[i].pid, Q[i].arri_time, Q[i].wait_time,
+			Q[i].burs_time, Q[i].exec_time, Q[i].rema_time, Q[i].to_io_time,
+			Q[i].priority);
+	}
+	printf("\n");
+}
+
+void print_Gantt_Chart(int Timer)
+{
+	int i;
+	printf("  GANTT CHART\n");
+	if (gantt[0] == 0)
+		printf("│");
+	for (i = 0; i<Timer; i++)
+		if (gantt[i] != gantt[i - 1]) {
+			if (gantt[i] >= 10)
+				printf("│%d|", gantt[i]);
+			else
+				printf("│%d", gantt[i]);
+		}
+		else {
+			if (gantt[i] >= 10)
+				printf("%d|", gantt[i]);
+			else
+				printf("%d", gantt[i]);
+		}
+		printf("│\n");
+		printf("\n");
+}
+
+void IO(int IO_no)
+{
+	int i;
+	printf("	I/O operation\n");
+	for (i = 0; i<IO_no; i++)
+		printf("%d초에 Process id %d번이 I/O를 수행했습니다.\n", IO_time[i], IO_id[i]);
+	printf("\n");
+}
+
+void print_result(PCB* terminated_Q, int P_no, int a)
+{
+	int i, sum_wait = 0, sum_burst = 0, sum_turn = 0;
+
+	for (i = 0; i<P_no; i++)
+		sum_wait += terminated_Q[i].wait_time; //Waiting Time의 합
+	for (i = 0; i<P_no; i++)
+		sum_burst += terminated_Q[i].burs_time; //Wait Time의 합
+	for (i = 0; i<P_no; i++)
+		sum_turn += terminated_Q[i].wait_time + terminated_Q[i].burs_time + terminated_Q[i].to_io_time;//Turnaround Time=wait+burst+IO
+	system("cls");
+	printf("  \nRESULT\n");
+	printf("│    Algorithm     │   # of Processes    │ # of Context Switch │\n");
+	switch (a)
+	{
+	case 0:
+		printf("       FCFS      ");
+		break;
+	case 1:
+		printf("       Preemp_SJF");
+		break;
+	case 2:
+		printf("       Non_SJF   ");
+		break;
+	case 3:
+		printf("       Preemp_PRI");
+		break;
+	case 4:
+		printf("       Non_PRI   ");
+		break;
+	case 5:
+		printf("       RoundRobin");
+		break;
+	}
+	printf("        %8d        %15d \n", P_no, Context_Switch);
+	printf("                   │     Sum of Wait     │   Average of Wait   │\n");
+	printf("                      %10d                  %7.3f\n", sum_wait,
+		(float)sum_wait / P_no);
+	printf("                   │    Sum of Burst     │  Average of Burst   │\n");
+	printf("                      %10d                  %7.3f\n", sum_burst,
+		(float)sum_burst / P_no);
+	printf("                   │  Sum of Turnaround  │Average of Turnaround│\n");
+	printf("                      %10d                  %7.3f\n", sum_turn,
+		(float)sum_turn / P_no);
+	printf("\n");
+}
+
+void print_result_all(int P_no)
+{
+	int i;
+	system("cls");
+	printf("  =RESULT of ALL=\n");
+	printf("│    Algorithm    │   # of Processes    │ # of Context Switch │\n");
+	for (i = 0; i<6; i++)
+	{
+		switch (i)
+		{
+		case 0:
+			printf("       FCFS      ");
+			break;
+		case 1:
+			printf("       Preemp_SJF");
+			break;
+		case 2:
+			printf("       Non_SJF   ");
+			break;
+		case 3:
+			printf("       Preemp_PRI");
+			break;
+		case 4:
+			printf("       Non_PRI   ");
+			break;
+		case 5:
+			printf("       RoundRobin");
+			break;
+		}
+		printf("        %8d        %15d \n", result[i].processes, result[i].num_cs);
+	}
+	printf("│    Algorithm    │     Sum of Wait     │   Average of Wait   │\n");
+	for (i = 0; i<6; i++)
+	{
+		switch (i)
+		{
+		case 0:
+			printf("       FCFS      ");
+			break;
+		case 1:
+			printf("       Preemp_SJF");
+			break;
+		case 2:
+			printf("       Non_SJF   ");
+			break;
+		case 3:
+			printf("       Preemp_PRI");
+			break;
+		case 4:
+			printf("       Non_PRI   ");
+			break;
+		case 5:
+			printf("       RoundRobin");
+			break;
+		}
+		printf("     %10d                  %7.3f\n", result[i].sum_wait,
+			(float)result[i].sum_wait / P_no);
+	}
+
+	printf("│    Algorithm    │     Sum of Burst    │   Average of Burst  │\n");
+	for (i = 0; i<6; i++)
+	{
+		switch (i)
+		{
+		case 0:
+			printf("       FCFS      ");
+			break;
+		case 1:
+			printf("       Preemp_SJF");
+			break;
+		case 2:
+			printf("       Non_SJF   ");
+			break;
+		case 3:
+			printf("       Preemp_PRI");
+			break;
+		case 4:
+			printf("       Non_PRI   ");
+			break;
+		case 5:
+			printf("       RoundRobin");
+			break;
+		}
+		printf("     %10d                  %7.3f\n", result[i].sum_burst,
+			(float)result[i].sum_burst / P_no);
+	}
+
+	printf("│    Algorithm    │  Sum of Turnaround  │Average of Turnaround│\n");
+	for (i = 0; i<6; i++)
+	{
+		switch (i)
+		{
+		case 0:
+			printf("       FCFS      ");
+			break;
+		case 1:
+			printf("       Preemp_SJF");
+			break;
+		case 2:
+			printf("       Non_SJF   ");
+			break;
+		case 3:
+			printf("       Preemp_PRI");
+			break;
+		case 4:
+			printf("       Non_PRI   ");
+			break;
+		case 5:
+			printf("       RoundRobin");
+			break;
+		}
+		printf("     %10d                  %7.3f\n", result[i].sum_turn,
+			(float)result[i].sum_turn / P_no);
+	}
+	printf("\n");
+}
+
+void FCFS(PCB* PCBarray, int P_no)
+{
+
+	int i = 0, j, k, s;
+
+	PCB* FCFS_PCB;
+	PCB* ready_Q;
+	PCB* waiting_Q;
+	PCB* terminated_Q;
+
+	Timer = 0;
+	Context_Switch = 0;
+	CPU = init_CPU(CPU);
+	IO_no = 0;
+
+	FCFS_PCB = copy_Queue(PCBarray, P_no);
+	ready_Q = create_Queue(P_no);
+	terminated_Q = create_Queue(P_no);
+	waiting_Q = create_Queue(P_no);
+
+
+	sort_AT(FCFS_PCB); //도착하는 순서대로 정렬
+
+	while (!Queue_full(terminated_Q, P_no)) //모든 프로세스가 terminated에 들어가면 끝
+	{
+		Sleep(DELAY);
+		while (FCFS_PCB[i].pid != 0) 
+		{
+			if (FCFS_PCB[i].arri_time != Timer) // 지금 시간이랑 다르면 패스
+				break;
+			else {
+				put_Queue(ready_Q, get_P(FCFS_PCB)); //도착하는 순서대로 레디 큐에
+				delete_Queue(FCFS_PCB, 0); //넣은 거는 삭제
+			}
+		}
+
+		for (s = 0; s < P_no; s++)
+		{
+			if (waiting_Q[s].pid != 0) { //waiting queue에 P가 있으면 있는 첫번째 P의 남은 IO 시간을 감소
+				waiting_Q[s].io_time--;
+				waiting_Q[s].to_io_time++;
+				IO_time[IO_no] = Timer; //IO 발생 시간
+				IO_id[IO_no] = waiting_Q[s].pid; // IO 발생 프로세스 넘버
+				IO_no++;
+
+				if (waiting_Q[s].io_time == 0) {
+					put_Queue(ready_Q, waiting_Q[s]);
+					delete_Queue(waiting_Q, s);
+					s = s - 1; /* 다시 봤을 때 모르겠으면 저번에 그렸던 그림 참고해봐 P가 남은 IO가 0이니깐 뒤에 P들을 당겨준거 거든
+							    근데 for문 때문에 s가 증가하자나 그러니까 끝난 P의 다음 P는 IO를 한번 못하게되 그러니 s를 1개 줄여서
+								다시 끝났던 자리부터 시작하게 하면 당겨져도 다음 P의 IO가 줄어들어 알겠지? 힘들어도 해보자*/
+				}
+			}
+		}
+	
+
+		if (CPU.rema_time <= 0) {
+			put_Queue(terminated_Q, CPU);
+			CPU = init_CPU(CPU);
+			if (ready_Q[0].pid != 0)
+				CPU = dispatcher(ready_Q, CPU);
+		}
+		
+		if (CPU.rema_time == ((rand() % (Burs_t + 1)) + 2))	 /*I/O burst condition 들어자 마자 IO가 되는 경우도 있네..
+															 그럴 수 있기는 한데 너무 복잡해 지는데 고민 해보자*/
+		{
+			CPU.io_time = ((rand() % (IO_t)) + 1);
+			put_Queue(waiting_Q, CPU); // I/O가 발생해서 CPU에 있는 거를 waiting_Q로
+			CPU = init_CPU(CPU);  //CPU를 초기화
+
+			if (ready_Q[0].pid != 0) //만약 ready_Q에 process가 있으면 CPU로 dispatch
+				CPU = dispatcher(ready_Q, CPU);
+		}
+
+
+		system("cls");
+		printf(" -First Come First Served-\n");
+		print_PCB(PCBarray, P_no);
+		print_CPU(CPU);
+		printf("READY QUEUE\n");
+		print_Queue(ready_Q);
+		printf("WAITING QUEUE\n");
+		print_Queue(waiting_Q);
+		printf("TERMINATED QUEUE\n");
+		print_Queue(terminated_Q);
+		IO(IO_no);
+		print_Gantt_Chart(Timer);
+
+		CPU.exec_time++;
+		CPU.rema_time--;
+		gantt[Timer] = CPU.pid;
+		for (j = 0; ready_Q[j].pid != 0; j++)
+			ready_Q[j].wait_time++;
+		Timer++;
+	}
+	Timer--;
+	printf("넘어 가려면 아무 키나 입력하세요");
+	scanf("%d", &s); //결과 값 확인 위해서 쓴 거임 나중에는 지워용
+
+
+	print_result(terminated_Q, P_no, 0);
+
+	result[0].processes = P_no;
+	result[0].num_cs = Context_Switch;
+	for (k = 0; k<P_no; k++)
+		result[0].sum_wait += terminated_Q[k].wait_time;
+	result[0].ave_wait = (float)result[0].sum_wait / P_no;
+	for (k = 0; k<P_no; k++)
+		result[0].sum_burst += terminated_Q[k].burs_time;
+	result[0].ave_burst = (float)result[0].sum_burst / P_no;
+	for (k = 0; k<P_no; k++)
+		result[0].sum_turn += terminated_Q[k].wait_time + terminated_Q[k].burs_time + terminated_Q[k].to_io_time;
+	result[0].ave_turn = (float)result[0].sum_turn / P_no;
+
+	free(FCFS_PCB);
+	free(ready_Q);
+	free(terminated_Q);
+	free(waiting_Q);
+
+}
+
+void preemp_SJF(PCB* PCBarray, int P_no)
+{
+	int i = 0, j, k, s;
+	PCB* preempSJF_PCB;
+	PCB* ready_Q;
+	PCB* waiting_Q;
+	PCB* terminated_Q;
+
+	Timer = 0;
+	Context_Switch = 0;
+	CPU = init_CPU(CPU);
+	IO_no = 0;
+
+	preempSJF_PCB = copy_Queue(PCBarray, P_no);
+	ready_Q = create_Queue(P_no);
+	terminated_Q = create_Queue(P_no);
+	waiting_Q = create_Queue(P_no);
+
+	sort_AT(preempSJF_PCB);
+
+	while (!Queue_full(terminated_Q, P_no)) //terminated Q에 모든 P가 차있을 때 멈춘다
+	{
+		Sleep(DELAY); //1초
+		while (preempSJF_PCB[i].pid != 0)  //PCB를 모두 옮김
+		{
+			if (preempSJF_PCB[i].arri_time != Timer) //arrival time이 지금 Timer과 맞지 않으면 pass
+				break;
+			else
+			{
+				put_Queue(ready_Q, get_P(preempSJF_PCB)); //arrival time이 지금 Timer과 맞으면 ready Q에 넣은다
+				delete_Queue(preempSJF_PCB, 0);
+			}
+		}
+
+		sort_RT(ready_Q); //남은 시간에 따라 순서대로 줄 세우기 이 밑으로는 IO와 CPU처리 발생
+
+		if (CPU.rema_time == ((rand() % (Burs_t + 1)) + 2))	 //I/O burst condition 
+		{
+			CPU.io_time = ((rand() % (IO_t)) + 1);
+			put_Queue(waiting_Q, CPU); // I/O가 발생해서 CPU에 있는 거를 waiting_Q로
+			CPU = init_CPU(CPU);  //CPU를 초기화
+
+			if (ready_Q[0].pid != 0) //만약 ready_Q에 process가 있으면 CPU로 dispatch
+				CPU = dispatcher(ready_Q, CPU);
+		}
+
+		if (CPU.rema_time <= 0) //CPU에 있는 P의 실행이 끝나면 terminated_Q로 이동
+		{
+			put_Queue(terminated_Q, CPU);
+			CPU = init_CPU(CPU);
+			if (ready_Q[0].pid != 0)
+				CPU = dispatcher(ready_Q, CPU);
+		}
+
+		else if (CPU.rema_time>ready_Q[0].rema_time) //ready_Q에 P가 선점
+			CPU = dispatcher(ready_Q, CPU);
+		
+		
+		for (s = 0; s < P_no; s++) //waiting_Q의 IO 처리
+		{
+			if (waiting_Q[s].pid != 0) { //waiting queue에 P가 있으면 있는 첫번째 P의 남은 IO 시간을 감소
+				waiting_Q[s].io_time--;
+				waiting_Q[s].to_io_time++;
+				IO_time[IO_no] = Timer; //IO 발생 시간
+				IO_id[IO_no] = waiting_Q[s].pid; // IO 발생 프로세스 넘버
+				IO_no++;
+
+				if (waiting_Q[s].io_time == 0) {
+					put_Queue(ready_Q, waiting_Q[s]);
+					delete_Queue(waiting_Q, s);
+					s = s - 1; //FCFS에 이유 보기
+				}
+			}
+		}
+
+
+
+		system("cls");
+		printf(" -Shortest Job First(preemptive)-\n");
+		print_PCB(PCBarray, P_no);
+		print_CPU(CPU);
+		printf("READY QUEUE\n");
+		print_Queue(ready_Q);
+		printf("WAITING QUEUE\n");
+		print_Queue(waiting_Q);
+		printf("TERMINATED QUEUE\n");
+		print_Queue(terminated_Q);
+
+		IO(IO_no);
+		print_Gantt_Chart(Timer);
+
+		CPU.exec_time++;
+		CPU.rema_time--;
+
+		gantt[Timer] = CPU.pid;
+
+		for (j = 0; ready_Q[j].pid != 0; j++)
+			ready_Q[j].wait_time++;
+
+		Timer++;
+	}
+	Timer--;
+	printf("넘어 가려면 아무 키나 입력하세요");
+	scanf("%d", &s); //정상작동 확인
+
+
+	print_result(terminated_Q, P_no, 1);
+
+	result[1].processes = P_no;
+	result[1].num_cs = Context_Switch;
+	for (k = 0; k<P_no; k++)
+		result[1].sum_wait += terminated_Q[k].wait_time;
+	result[1].ave_wait = (float)result[1].sum_wait / P_no;
+	for (k = 0; k<P_no; k++)
+		result[1].sum_burst += terminated_Q[k].burs_time;
+	result[1].ave_burst = (float)result[1].sum_burst / P_no;
+	for (k = 0; k<P_no; k++)
+		result[1].sum_turn += terminated_Q[k].wait_time + terminated_Q[k].burs_time + terminated_Q[k].to_io_time;
+	result[1].ave_turn = (float)result[1].sum_turn / P_no;
+
+	free(preempSJF_PCB);
+	free(ready_Q);
+	free(terminated_Q);
+	free(waiting_Q);
+
+}
+
+void non_SJF(PCB* PCBarray, int P_no)
+{
+	int i = 0, j, k, s;
+
+	PCB* nonSJF_PCB;
+	PCB* ready_Q;
+	PCB* waiting_Q;
+	PCB* terminated_Q;
+
+	Timer = 0;
+	Context_Switch = 0;
+	CPU = init_CPU(CPU);
+	IO_no = 0;
+	nonSJF_PCB = copy_Queue(PCBarray, P_no);
+	ready_Q = create_Queue(P_no);
+	terminated_Q = create_Queue(P_no);
+	waiting_Q = create_Queue(P_no);
+
+	sort_AT(nonSJF_PCB);
+
+	while (!Queue_full(terminated_Q, P_no))
+	{
+		Sleep(DELAY);
+		while (nonSJF_PCB[i].pid != 0)
+		{
+			if (nonSJF_PCB[i].arri_time != Timer)
+				break;
+			else
+			{
+				put_Queue(ready_Q, get_P(nonSJF_PCB));
+				delete_Queue(nonSJF_PCB, 0);
+			}
+		}
+
+
+		sort_RT(ready_Q); //남은 시간에 따라 순서대로 줄 세우기 이 밑으로 IO와 CPU처리 발생
+
+		if (CPU.rema_time == ((rand() % (Burs_t + 1)) + 2)) //I/O burst condition
+		{
+			CPU.io_time = ((rand() % (IO_t)) + 1);
+			put_Queue(waiting_Q, CPU);
+			CPU = init_CPU(CPU);
+
+			if (ready_Q[0].pid != 0)
+				CPU = dispatcher(ready_Q, CPU);
+		}
+
+		if (CPU.rema_time <= 0) // P가 끝난거
+		{
+			put_Queue(terminated_Q, CPU);
+			CPU = init_CPU(CPU);
+			if (ready_Q[0].pid != 0)
+				CPU = dispatcher(ready_Q, CPU);
+		}
+	
+		for (s = 0; s < P_no; s++) //waiting_Q의 IO 처리
+		{
+			if (waiting_Q[s].pid != 0) { //waiting queue에 P가 있으면 있는 첫번째 P의 남은 IO 시간을 감소
+				waiting_Q[s].io_time--;
+				waiting_Q[s].to_io_time++;
+				IO_time[IO_no] = Timer; //IO 발생 시간
+				IO_id[IO_no] = waiting_Q[s].pid; // IO 발생 프로세스 넘버
+				IO_no++;
+
+				if (waiting_Q[s].io_time == 0) {
+					put_Queue(ready_Q, waiting_Q[s]);
+					delete_Queue(waiting_Q, s);
+					s = s - 1; //FCFS에 이유 보기
+				}
+			}
+		}
+
+
+		system("cls");
+		printf(" -Shortest Job First(non-preemptive)-\n");
+		print_PCB(PCBarray, P_no);
+		print_CPU(CPU);
+		printf("READY QUEUE\n");
+		print_Queue(ready_Q);
+		printf("WAITING QUEUE\n");
+		print_Queue(waiting_Q);
+		printf("TERMINATED QUEUE\n");
+		print_Queue(terminated_Q);
+		IO(IO_no);
+		print_Gantt_Chart(Timer);
+
+		CPU.exec_time++;
+		CPU.rema_time--;
+
+		gantt[Timer] = CPU.pid;
+
+		for (j = 0; ready_Q[j].pid != 0; j++)
+			ready_Q[j].wait_time++;
+
+		Timer++;
+	}
+	Timer--;
+	printf("넘어 가려면 아무 키나 입력하세요");
+	scanf("%d", &s); //결과 값 확인 위해서 쓴 거임 나중에는 지워용
+
+	print_result(terminated_Q, P_no, 2);
+
+	result[2].processes = P_no;
+	result[2].num_cs = Context_Switch;
+	for (k = 0; k<P_no; k++)
+		result[2].sum_wait += terminated_Q[k].wait_time;
+	result[2].ave_wait = (float)result[2].sum_wait / P_no;
+	for (k = 0; k<P_no; k++)
+		result[2].sum_burst += terminated_Q[k].burs_time;
+	result[2].ave_burst = (float)result[2].sum_burst / P_no;
+	for (k = 0; k<P_no; k++)
+		result[2].sum_turn += terminated_Q[k].wait_time + terminated_Q[k].burs_time + terminated_Q[k].to_io_time;
+	result[2].ave_turn = (float)result[2].sum_turn / P_no;
+
+	free(nonSJF_PCB);
+	free(ready_Q);
+	free(terminated_Q);
+	free(waiting_Q);
+}
+
+
+void preemp_Priority(PCB* PCBarray, int P_no)
+{
+	int i = 0, j, k, s;
+
+	PCB* preempPRI_PCB;
+	PCB* ready_Q;
+	PCB* waiting_Q;
+	PCB* terminated_Q;
+
+	Timer = 0;
+
+	Context_Switch = 0;
+	CPU = init_CPU(CPU);
+	IO_no = 0;
+	preempPRI_PCB = copy_Queue(PCBarray, P_no);
+
+	ready_Q = create_Queue(P_no);
+	terminated_Q = create_Queue(P_no);
+	waiting_Q = create_Queue(P_no);
+
+	sort_AT(preempPRI_PCB);
+
+	while (!Queue_full(terminated_Q, P_no))
+	{
+		Sleep(DELAY);
+		while (preempPRI_PCB[i].pid != 0) //PCB 옮기기
+		{
+			if (preempPRI_PCB[i].arri_time != Timer)
+				break;
+			else
+			{
+				put_Queue(ready_Q, get_P(preempPRI_PCB));
+				delete_Queue(preempPRI_PCB, 0);
+			}
+		}
+
+		sort_Pri(ready_Q); //우선순위에 따른 정렬
+
+
+		if (CPU.rema_time == ((rand() % (Burs_t + 1)) + 2)) //I/O burst condition
+		{
+			CPU.io_time = ((rand() % (IO_t)) + 1);
+			put_Queue(waiting_Q, CPU);
+			CPU = init_CPU(CPU);
+
+			if (ready_Q[0].pid != 0)
+				CPU = dispatcher(ready_Q, CPU);
+		}
+
+		if (CPU.rema_time <= 0) //CPU내에 P 종료
+		{
+			put_Queue(terminated_Q, CPU);
+			CPU = init_CPU(CPU);
+			if (ready_Q[0].pid != 0)
+				CPU = dispatcher(ready_Q, CPU);
+		}
+		else if (CPU.priority<ready_Q[0].priority) //priority에 따른 선점
+			CPU = dispatcher(ready_Q, CPU);
+
+
+		for (s = 0; s < P_no; s++) //waiting_Q의 IO 처리
+		{
+			if (waiting_Q[s].pid != 0) { //waiting queue에 P가 있으면 있는 첫번째 P의 남은 IO 시간을 감소
+				waiting_Q[s].io_time--;
+				waiting_Q[s].to_io_time++;
+				IO_time[IO_no] = Timer; //IO 발생 시간
+				IO_id[IO_no] = waiting_Q[s].pid; // IO 발생 프로세스 넘버
+				IO_no++;
+
+				if (waiting_Q[s].io_time == 0) {
+					put_Queue(ready_Q, waiting_Q[s]);
+					delete_Queue(waiting_Q, s);
+					s = s - 1; //FCFS에 이유 보기
+				}
+			}
+		}
+
+
+		system("cls");
+		printf(" -Priority(preemptive)-\n");
+		print_PCB(PCBarray, P_no);
+		print_CPU(CPU);
+		printf("READY QUEUE\n");
+		print_Queue(ready_Q);
+		printf("WAITING QUEUE\n");
+		print_Queue(waiting_Q);
+		printf("TERMINATED QUEUE\n");
+		print_Queue(terminated_Q);
+		IO(IO_no);
+		print_Gantt_Chart(Timer);
+
+		CPU.exec_time++;
+		CPU.rema_time--;
+
+		gantt[Timer] = CPU.pid;
+
+		for (j = 0; ready_Q[j].pid != 0; j++)
+			ready_Q[j].wait_time++;
+
+		Timer++;
+	}
+	Timer--;
+	printf("넘어 가려면 아무 키나 입력하세요");
+	scanf("%d", &s); //결과 값 확인 위해서 쓴 거임 나중에는 지워용
+
+
+	print_result(terminated_Q, P_no, 3);
+
+	result[3].processes = P_no;
+	result[3].num_cs = Context_Switch;
+	for (k = 0; k<P_no; k++)
+		result[3].sum_wait += terminated_Q[k].wait_time;
+	result[3].ave_wait = (float)result[3].sum_wait / P_no;
+	for (k = 0; k<P_no; k++)
+		result[3].sum_burst += terminated_Q[k].burs_time;
+	result[3].ave_burst = (float)result[3].sum_burst / P_no;
+	for (k = 0; k<P_no; k++)
+		result[3].sum_turn += terminated_Q[k].wait_time + terminated_Q[k].burs_time + terminated_Q[k].to_io_time;
+	result[3].ave_turn = (float)result[3].sum_turn / P_no;
+
+	free(preempPRI_PCB);
+	free(ready_Q);
+	free(terminated_Q);
+	free(waiting_Q);
+}
+
+
+void non_Priority(PCB* PCBarray, int P_no)
+{
+	int i = 0, j, k, s;
+
+	PCB* nonPRI_PCB;
+	PCB* ready_Q;
+	PCB* waiting_Q;
+	PCB* terminated_Q;
+
+	Timer = 0;
+	Context_Switch = 0;
+	CPU = init_CPU(CPU);
+	IO_no = 0;
+	nonPRI_PCB = copy_Queue(PCBarray, P_no);
+	ready_Q = create_Queue(P_no);
+	terminated_Q = create_Queue(P_no);
+	waiting_Q = create_Queue(P_no);
+
+	sort_AT(nonPRI_PCB);
+
+	while (!Queue_full(terminated_Q, P_no))
+	{
+		Sleep(DELAY);
+		while (nonPRI_PCB[i].pid != 0)
+		{
+			if (nonPRI_PCB[i].arri_time != Timer)
+				break;
+			else
+			{
+				put_Queue(ready_Q, get_P(nonPRI_PCB));
+				delete_Queue(nonPRI_PCB, 0);
+			}
+		}
+
+
+		sort_Pri(ready_Q); //우선순위에 따른 정렬
+
+		if (CPU.rema_time == ((rand() % (Burs_t + 1)) + 2)) //I/O burst condition
+		{
+			CPU.io_time = ((rand() % (IO_t)) + 1);
+			put_Queue(waiting_Q, CPU);
+			CPU = init_CPU(CPU);
+
+			if (ready_Q[0].pid != 0)
+				CPU = dispatcher(ready_Q, CPU);
+		}
+
+		if (CPU.rema_time <= 0)
+		{
+			put_Queue(terminated_Q, CPU);
+			CPU = init_CPU(CPU);
+			if (ready_Q[0].pid != 0)
+				CPU = dispatcher(ready_Q, CPU);
+		}
+
+		for (s = 0; s < P_no; s++) //waiting_Q의 IO 처리
+		{
+			if (waiting_Q[s].pid != 0) { //waiting queue에 P가 있으면 있는 첫번째 P의 남은 IO 시간을 감소
+				waiting_Q[s].io_time--;
+				waiting_Q[s].to_io_time++;
+				IO_time[IO_no] = Timer; //IO 발생 시간
+				IO_id[IO_no] = waiting_Q[s].pid; // IO 발생 프로세스 넘버
+				IO_no++;
+
+				if (waiting_Q[s].io_time == 0) {
+					put_Queue(ready_Q, waiting_Q[s]);
+					delete_Queue(waiting_Q, s);
+					s = s - 1; //FCFS에 이유 보기
+				}
+			}
+		}
+
+
+		system("cls");
+		printf(" -Priority(non-preemptive)-\n");
+		print_PCB(PCBarray, P_no);
+		print_CPU(CPU);
+		printf("READY QUEUE\n");
+		print_Queue(ready_Q);
+		printf("WAITING QUEUE\n");
+		print_Queue(waiting_Q);
+		printf("TERMINATED QUEUE\n");
+		print_Queue(terminated_Q);
+		IO(IO_no);
+		print_Gantt_Chart(Timer);
+
+		CPU.exec_time++;
+		CPU.rema_time--;
+
+		gantt[Timer] = CPU.pid;
+
+		for (j = 0; ready_Q[j].pid != 0; j++)
+			ready_Q[j].wait_time++;
+
+		Timer++;
+	}
+	Timer--;
+	printf("넘어 가려면 아무 키나 입력하세요");
+	scanf("%d", &s); //결과 값 확인 위해서 쓴 거임 나중에는 지워용
+
+	print_result(terminated_Q, P_no, 4);
+
+	result[4].processes = P_no;
+	result[4].num_cs = Context_Switch;
+	for (k = 0; k<P_no; k++)
+		result[4].sum_wait += terminated_Q[k].wait_time;
+	result[4].ave_wait = (float)result[4].sum_wait / P_no;
+	for (k = 0; k<P_no; k++)
+		result[4].sum_burst += terminated_Q[k].burs_time;
+	result[4].ave_burst = (float)result[4].sum_burst / P_no;
+	for (k = 0; k<P_no; k++)
+		result[4].sum_turn += terminated_Q[k].wait_time + terminated_Q[k].burs_time + terminated_Q[k].to_io_time;
+	result[4].ave_turn = (float)result[4].sum_turn / P_no;
+
+	free(nonPRI_PCB);
+	free(ready_Q);
+	free(terminated_Q);
+	free(waiting_Q);
+}
+
+void RR(PCB* PCBarray, int P_no)
+{
+	int i = 0, j, k, s;
+	int Q;
+
+	PCB* RR_PCB;
+	PCB* ready_Q;
+	PCB* waiting_Q;
+	PCB* terminated_Q;
+
+	Timer = 0;
+	Context_Switch = 0;
+	CPU = init_CPU(CPU);
+	IO_no = 0;
+
+	RR_PCB = copy_Queue(PCBarray, P_no);
+	ready_Q = create_Queue(P_no);
+	terminated_Q = create_Queue(P_no);
+	waiting_Q = create_Queue(P_no);
+
+	printf("Time Quantum을 입력하세요 : ");
+	scanf("%d", &Q);
+	sort_AT(RR_PCB);
+
+	while (!Queue_full(terminated_Q, P_no))
+	{
+		Sleep(DELAY);
+		while (RR_PCB[i].pid != 0)
+		{
+			if (RR_PCB[i].arri_time != Timer)
+				break;
+			else
+			{
+				put_Queue(ready_Q, get_P(RR_PCB));
+				delete_Queue(RR_PCB, 0);
+			}
+		}
+
+		if (CPU.rema_time == ((rand() % (Burs_t + 1)) + 2)) //I/O burst condition
+		{
+			CPU.io_time = ((rand() % (IO_t)) + 1);
+			put_Queue(waiting_Q, CPU);
+			CPU = init_CPU(CPU);
+
+			if (ready_Q[0].pid != 0)
+				CPU = dispatcher(ready_Q, CPU);
+		}
+
+		if (CPU.rema_time <= 0)
+		{
+			put_Queue(terminated_Q, CPU);
+			CPU = init_CPU(CPU);
+			if (ready_Q[0].pid != 0)
+				CPU = dispatcher(ready_Q, CPU);
+		}
+		else if (CPU.exec_time%Q == 0)  //time quantum을 다 쓰면 ready_Q에서 새로운 P를 갖고 온당 
+			CPU = dispatcher(ready_Q, CPU);
+
+		for (s = 0; s < P_no; s++) //waiting_Q의 IO 처리
+		{
+			if (waiting_Q[s].pid != 0) { //waiting queue에 P가 있으면 있는 첫번째 P의 남은 IO 시간을 감소
+				waiting_Q[s].io_time--;
+				waiting_Q[s].to_io_time++;
+				IO_time[IO_no] = Timer; //IO 발생 시간
+				IO_id[IO_no] = waiting_Q[s].pid; // IO 발생 프로세스 넘버
+				IO_no++;
+
+				if (waiting_Q[s].io_time == 0) {
+					put_Queue(ready_Q, waiting_Q[s]);
+					delete_Queue(waiting_Q, s);
+					s = s - 1; //FCFS에 이유 보기
+				}
+			}
+		}
+
+
+		system("cls");
+		printf(" -Round Robin(Time Quantum: %d)-\n", Q);
+		print_PCB(PCBarray, P_no);
+		print_CPU(CPU);
+		printf("READY QUEUE\n");
+		print_Queue(ready_Q);
+		printf("WAITING QUEUE\n");
+		print_Queue(waiting_Q);
+		printf("TERMINATED QUEUE\n");
+		print_Queue(terminated_Q);
+		IO(IO_no);
+		print_Gantt_Chart(Timer);
+		CPU.exec_time++;
+		CPU.rema_time--;
+
+		gantt[Timer] = CPU.pid;
+
+		for (j = 0; ready_Q[j].pid != 0; j++)
+			ready_Q[j].wait_time++;
+
+		Timer++;
+	}
+	Timer--;
+	printf("넘어 가려면 아무 키나 입력하세요");
+	scanf("%d", &s); //결과 값 확인 위해서 쓴 거임 나중에는 지워용
+
+	print_result(terminated_Q, P_no, 5);
+
+	result[5].processes = P_no;
+	result[5].num_cs = Context_Switch;
+	for (k = 0; k<P_no; k++)
+		result[5].sum_wait += terminated_Q[k].wait_time;
+	result[5].ave_wait = (float)result[5].sum_wait / P_no;
+	for (k = 0; k<P_no; k++)
+		result[5].sum_burst += terminated_Q[k].burs_time;
+	result[5].ave_burst = (float)result[5].sum_burst / P_no;
+	for (k = 0; k<P_no; k++)
+		result[5].sum_turn += terminated_Q[k].wait_time + terminated_Q[k].burs_time + terminated_Q[k].to_io_time;
+	result[5].ave_turn = (float)result[5].sum_turn / P_no;
+
+	free(RR_PCB);
+	free(ready_Q);
+	free(terminated_Q);
+	free(waiting_Q);
+}
+
+
+int Select(void)
+{
+	PCB* PCBarray;
+	int P_no;
+	int how, Al_sel;
+	int Al_no[6] = { 0 };
+
+	while (1)
+	{
+		system("cls");
+		printf("┌───────────────────┐\n");
+		printf("│process 생성시 시스템 랜덤 입력 : 1   │\n");
+		printf("│process 생성시 사용자 직접 입력 : 2   │\n");
+		printf("│                                      │\n");
+		printf("│process의 IO는 random 생성됩니다.     │\n");
+		printf("└───────────────────┘\n");
+		printf("\n");
+		printf("프로세스 생성 방식 선택 : ");
+		scanf("%d", &how);
+		if (error_check(how, 1, 2))
+			break;
+	}
+
+
+	if (how == 1)
+	{
+		P_no = process_num();
+		PCBarray = create_rand_P(P_no);
+		printf("\n");
+		print_PCB(PCBarray, P_no);
+		printf("%d 개의 프로세스 생성\n", P_no);
+		printf("\n");
+	}
+
+	else
+	{
+		P_no = process_num();
+		PCBarray = create_user_P(P_no);
+		printf("\n");
+		print_PCB(PCBarray, P_no);
+		printf("%d 개의 프로세스 생성\n", P_no);
+		printf("\n");
+	}
+
+
+	while (1)
+	{
+		printf("┌────── Scheduling Algorithm ───────┐\n");
+		while (1)
+		{
+			if (Al_no[0] == 0)
+				printf("│ 1 : First Come, First Served                   │\n");
+			else
+				printf("│ 1 : First Come, First Served            (완료) │\n");
+
+			if (Al_no[1] == 0)
+				printf("│ 2 : Shortest Job First (Preemptive)            │\n");
+			else
+				printf("│ 2 : Shortest Job First (Preemptive)     (완료) │\n");
+
+			if (Al_no[2] == 0)
+				printf("│ 3 : Shortest Job First (Non-Preemptive)        │\n");
+			else
+				printf("│ 3 : Shortest Job First (Non-Preemptive) (완료) │\n");
+
+			if (Al_no[3] == 0)
+				printf("│ 4 : Priority (Preemptive)                      │\n");
+			else
+				printf("│ 4 : Priority (Preemptive)               (완료) │\n");
+
+			if (Al_no[4] == 0)
+				printf("│ 5 : Priority (Non-Preemptive)                  │\n");
+			else
+				printf("│ 5 : Priority (Non-Preemptive)           (완료) │\n");
+
+			if (Al_no[5] == 0)
+				printf("│ 6 : Round Robin                                │\n");
+			else
+				printf("│ 6 : Round Robin                         (완료) │\n");
+
+			printf("└────────────────────────┘\n");
+			printf("\n");
+			printf("7: Result\n");
+			printf("8: Create New Process\n");
+			printf("9: exit\n");
+			printf("\n");
+			printf("메뉴를 선택하세요  : ");
+			scanf("%d", &Al_sel);
+			if (error_check(Al_sel, 1, 9))
+				break;
+		}
+		switch (Al_sel)
+		{
+		case 1:
+			FCFS(PCBarray, P_no);
+			Al_no[0] = 1;
+			break;
+		case 2:
+			preemp_SJF(PCBarray, P_no);
+			Al_no[1] = 1;
+			break;
+		case 3:
+			non_SJF(PCBarray, P_no);
+			Al_no[2] = 1;
+			break;
+		case 4:
+			preemp_Priority(PCBarray, P_no);
+			Al_no[3] = 1;
+			break;
+		case 5:
+			non_Priority(PCBarray, P_no);
+			Al_no[4] = 1;
+			break;
+		case 6:
+			RR(PCBarray, P_no);
+			Al_no[5] = 1;
+			break;
+		case 7:
+			print_PCB(PCBarray, P_no);
+			printf("\n");
+			print_result_all(P_no);
+			break;
+		case 8:
+			return 0; // 프로세스 초기화
+		case 9: //Exit
+			return 1;
+		}
+	}
+	return 0;
+}
